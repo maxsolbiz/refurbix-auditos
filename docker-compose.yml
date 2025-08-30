@@ -1,0 +1,416 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # API Gateway
+  # =============================================================================
+  api-gateway:
+    image: kong:3.4-alpine
+    container_name: refurbix-api-gateway
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_DATABASE: kong
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_ADMIN_GUI_URL: http://localhost:8002
+      KONG_DECLARATIVE_CONFIG: /opt/kong/kong.yml
+    ports:
+      - "8000:8000"  # Proxy port
+      - "8001:8001"  # Admin API
+      - "8002:8002"  # Admin GUI
+      - "8443:8443"  # HTTPS proxy
+    volumes:
+      - ./services/api-gateway/kong.yml:/opt/kong/kong.yml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # Microservices
+  # =============================================================================
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: refurbix-user-service
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-key}
+      JWT_EXPIRES_IN: 24h
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./services/user-service:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  audit-service:
+    build:
+      context: ./services/audit-service
+      dockerfile: Dockerfile
+    container_name: refurbix-audit-service
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-dev-token}
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./services/audit-service:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      influxdb:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  device-service:
+    build:
+      context: ./services/device-service
+      dockerfile: Dockerfile
+    container_name: refurbix-device-service
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+    ports:
+      - "3003:3003"
+    volumes:
+      - ./services/device-service:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  workflow-service:
+    build:
+      context: ./services/workflow-service
+      dockerfile: Dockerfile
+    container_name: refurbix-workflow-service
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+    ports:
+      - "3004:3004"
+    volumes:
+      - ./services/workflow-service:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  reporting-service:
+    build:
+      context: ./services/reporting-service
+      dockerfile: Dockerfile
+    container_name: refurbix-reporting-service
+    environment:
+      NODE_ENV: development
+      PORT: 3005
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-dev-token}
+    ports:
+      - "3005:3005"
+    volumes:
+      - ./services/reporting-service:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: refurbix-notification-service
+    environment:
+      NODE_ENV: development
+      PORT: 3006
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/refurbix
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+    ports:
+      - "3006:3006"
+    volumes:
+      - ./services/notification-service:/app
+      - /app/node_modules
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: npm run dev
+
+  # =============================================================================
+  # Frontend Dashboard
+  # =============================================================================
+  dashboard:
+    build:
+      context: ./clients/dashboard
+      dockerfile: Dockerfile
+      target: development
+    container_name: refurbix-dashboard
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_WS_URL: ws://localhost:8000
+      REACT_APP_VERSION: ${VERSION:-dev}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./clients/dashboard:/app
+      - /app/node_modules
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+  # =============================================================================
+  # Databases
+  # =============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: refurbix-postgres
+    environment:
+      POSTGRES_DB: refurbix
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_MULTIPLE_DATABASES: kong,refurbix_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+      - ./database/migrations:/migrations:ro
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d refurbix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: refurbix-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./infrastructure/docker/redis/redis.conf:/etc/redis/redis.conf:ro
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: refurbix-influxdb
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-password}
+      DOCKER_INFLUXDB_INIT_ORG: refurbix
+      DOCKER_INFLUXDB_INIT_BUCKET: metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-dev-token}
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =============================================================================
+  # Message Queue & Storage
+  # =============================================================================
+  nats:
+    image: nats:2.10-alpine
+    container_name: refurbix-nats
+    ports:
+      - "4222:4222"  # Client connections
+      - "8222:8222"  # HTTP management
+      - "6222:6222"  # Routing port
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: ["--jetstream", "--store_dir", "/data"]
+    volumes:
+      - nats_data:/data
+
+  minio:
+    image: minio/minio:RELEASE.2023-12-07T04-16-00Z
+    container_name: refurbix-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # =============================================================================
+  # Monitoring & Development Tools
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: refurbix-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: refurbix-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3030:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: refurbix-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+
+  # =============================================================================
+  # Development Tools
+  # =============================================================================
+  pgadmin:
+    image: dpage/pgadmin4:7.8
+    container_name: refurbix-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@refurbix.com
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_DISABLE_POSTFIX: "true"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - refurbix-network
+    restart: unless-stopped
+
+# =============================================================================
+# Networks & Volumes
+# =============================================================================
+networks:
+  refurbix-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+  redis_data:
+  influxdb_data:
+  nats_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  pgadmin_data:

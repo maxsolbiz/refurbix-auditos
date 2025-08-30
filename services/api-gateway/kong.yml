@@ -1,0 +1,52 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: user-service
+    url: http://user-service:3001
+    plugins:
+      - name: jwt
+        config:
+          secret_is_base64: false
+      - name: rate-limiting
+        config:
+          minute: 50
+          hour: 500
+
+  # Notification routes (auth required)
+  - name: notification-routes
+    service: notification-service
+    paths:
+      - /v1/notifications
+    strip_path: false
+    plugins:
+      - name: jwt
+        config:
+          secret_is_base64: false
+      - name: rate-limiting
+        config:
+          minute: 100
+          hour: 1000
+
+  # Health check routes (no auth)
+  - name: health-routes
+    service: user-service
+    paths:
+      - /health
+    strip_path: false
+
+plugins:
+  - name: prometheus
+    config:
+      per_consumer: false
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+
+consumers:
+  - username: refurbix-dashboard
+    custom_id: dashboard-client
+    jwt_secrets:
+      - algorithm: HS256
+        key: refurbix-dashboard-key
+        secret: your-super-secret-jwt-key-change-in-production
